@@ -1,0 +1,51 @@
+[
+    {
+        "url": "https://www.similarweb.com/website/casoca.com.br",
+        "name": "casoca.com.br",
+        "title": "casoca - especificação de produtos de arquitetura e design!",
+        "description": "bem-vindo à plataforma de especificação de produtos oficial do mercado brasileiro.",
+        "category": "news_and_media",
+        "icon": null,
+        "previewDesktop": null,
+        "previewMobile": null,
+        "globalRank": {
+            "rank": 63367
+        },
+        "countryRank": {
+            "countryCode": "BR",
+            "rank": 3388
+        },
+        "categoryRank": {
+            "category": "News_and_Media",
+            "rank": 211
+        },
+        "engagements": {
+            "visits": 545706,
+            "timeOnSite": 663.91,
+            "pagePerVisit": 11.55,
+            "bounceRate": 0.27
+        },
+        "trafficSources": {
+            "direct": 0.47,
+            "search": 0.49,
+            "social": 0.015
+        },
+        "topKeywords": [
+            {
+                "name": "casoca",
+                "volume": 28520
+            }
+        ],
+        "topCountries": [
+            {
+                "countryName": "Brazil",
+                "visitsShare": 0.94
+            }
+        ],
+        "estimatedMonthlyVisits": {
+            "2024-10-01": 545706
+        },
+        "scrapedAt": "2024-12-04T10:03:43.475Z",
+        "snapshotDate": "2024-12-01"
+    }
+]
