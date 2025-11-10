@@ -1,0 +1,170 @@
+return results
+
+    @staticmethod
+    def _extract_keywords_from_json(json_data: Dict[str, Any]) -> Optional[list]:
+        # Heuristic: look for keys containing 'topKeywords' or similar.
+        for key, value in json_data.items():
+            if not isinstance(value, (dict, list)):
+                continue
+            if "keyword" in key.lower() or "keywords" in key.lower():
+                if isinstance(value, list):
+                    return value
+        return None
+
+    def _try_parse_embedded_json(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """
+        Try to find a script[type='application/json' or 'application/ld+json'] with
+        relevant analytics data. This is deliberately generic to survive markup changes.
+        """
+        candidates = soup.find_all("script", type=re.compile("application/(ld\\+json|json)", re.IGNORECASE))
+        combined: Dict[str, Any] = {}
+        for script in candidates:
+            content = script.string or script.get_text()
+            if not content:
+                continue
+            try:
+                data = json.loads(content)
+            except Exception:  # noqa: BLE001
+                continue
+
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        combined.update(item)
+            elif isinstance(data, dict):
+                combined.update(data)
+
+        return combined
+
+    def _extract_from_embedded_json(self, json_data: Dict[str, Any]) -> Dict[str, Any]:
+        # This provides gentle enrichment on top of the basic HTML meta.
+        global_rank = None
+        country_rank = None
+        category_rank = None
+        engagements = None
+        traffic_sources = None
+        top_keywords = None
+        top_countries = None
+        estimated_monthly_visits = None
+        category = None
+
+        def get_nested(obj: Dict[str, Any], *keys: str) -> Any:
+            cur: Any = obj
+            for k in keys:
+                if not isinstance(cur, dict) or k not in cur:
+                    return None
+                cur = cur[k]
+            return cur
+
+        # Common patterns (heuristic)
+        global_rank = safe_int(get_nested(json_data, "globalRank", "rank") or get_nested(json_data, "global_rank"))
+        country_rank = get_nested(json_data, "countryRank")
+        category_rank = get_nested(json_data, "categoryRank")
+        engagements = get_nested(json_data, "engagements")
+        traffic_sources = get_nested(json_data, "trafficSources")
+        top_keywords = get_nested(json_data, "topKeywords") or self._extract_keywords_from_json(json_data)
+        top_countries = get_nested(json_data, "topCountries")
+        estimated_monthly_visits = get_nested(json_data, "estimatedMonthlyVisits")
+        category = json_data.get("category") or json_data.get("industry")
+
+        return {
+            "globalRank": global_rank,
+            "countryRank": country_rank,
+            "categoryRank": category_rank,
+            "engagements": engagements,
+            "trafficSources": traffic_sources,
+            "topKeywords": top_keywords,
+            "topCountries": top_countries,
+            "estimatedMonthlyVisits": estimated_monthly_visits,
+            "category": category,
+        }
+
+    def scrape_site(self, target: str) -> Dict[str, Any]:
+        """
+        Scrape a single target and return a structured dict matching the README spec.
+        """
+        similarweb_url = self.build_similarweb_url(target)
+        try:
+            html = self._fetch_page(similarweb_url)
+        except requests.RequestException as exc:
+            logger.error("Request failed for %s: %s", similarweb_url, exc)
+            domain = normalize_domain(target)
+            return {
+                "url": similarweb_url,
+                "name": domain,
+                "title": None,
+                "description": None,
+                "category": None,
+                "icon": None,
+                "previewDesktop": None,
+                "previewMobile": None,
+                "globalRank": None,
+                "countryRank": None,
+                "categoryRank": None,
+                "engagements": None,
+                "trafficSources": None,
+                "topKeywords": None,
+                "topCountries": None,
+                "estimatedMonthlyVisits": None,
+                "scrapedAt": timestamp_now_iso(),
+                "snapshotDate": None,
+                "error": str(exc),
+            }
+
+        soup = BeautifulSoup(html, "lxml")
+        basic = self._extract_basic_site_meta(soup, similarweb_url)
+
+        embedded_json = self._try_parse_embedded_json(soup)
+        enriched = self._extract_from_embedded_json(embedded_json) if embedded_json else {}
+
+        # If ranks are still missing, do a rough HTML extraction as a fallback.
+        if enriched.get("globalRank") is None:
+            enriched["globalRank"] = {
+                "rank": self._extract_number_near_label(soup, "Global Rank"),
+            }
+
+        if not enriched.get("countryRank"):
+            country_rank_val = self._extract_number_near_label(soup, "Country Rank")
+            if country_rank_val is not None:
+                enriched["countryRank"] = {"rank": country_rank_val, "countryCode": None}
+
+        if not enriched.get("categoryRank"):
+            category_rank_val = self._extract_number_near_label(soup, "Category Rank")
+            if category_rank_val is not None:
+                enriched["categoryRank"] = {"rank": category_rank_val, "category": None}
+
+        # Traffic sources heuristic (percentages by label)
+        if not enriched.get("trafficSources"):
+            enriched["trafficSources"] = self._extract_percentages_from_table(
+                soup,
+                labels={
+                    "direct": "Direct",
+                    "search": "Search",
+                    "social": "Social",
+                    "referrals": "Referrals",
+                    "mail": "Mail",
+                    "displayAds": "Display Ads",
+                },
+            )
+
+        result: Dict[str, Any] = {
+            **basic,
+            "category": enriched.get("category", basic.get("category")),
+            "globalRank": enriched.get("globalRank"),
+            "countryRank": enriched.get("countryRank"),
+            "categoryRank": enriched.get("categoryRank"),
+            "engagements": enriched.get("engagements"),
+            "trafficSources": enriched.get("trafficSources"),
+            "topKeywords": enriched.get("topKeywords"),
+            "topCountries": enriched.get("topCountries"),
+            "estimatedMonthlyVisits": enriched.get("estimatedMonthlyVisits"),
+            "scrapedAt": timestamp_now_iso(),
+            "snapshotDate": None,
+        }
+
+        # Normalize numeric globalRank format if it's just an int in enriched
+        if isinstance(result["globalRank"], int):
+            result["globalRank"] = {"rank": result["globalRank"]}
+
+        logger.debug("Scraped data for %s: %s", target, result)
+        return result
